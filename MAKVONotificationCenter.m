@@ -20,6 +20,60 @@ static const char			* const MAKVONotificationCenter_HelpersKey = "MAKVONotificat
 static NSMutableSet			*MAKVONotificationCenter_swizzledClasses = nil;
 
 /******************************************************************************/
+@implementation NSObject (MAWeakReference)
+
+static NSSet *weakRefUnavailableClasses = nil;
+
++ (void)load {
+    // https://developer.apple.com/library/mac/#releasenotes/ObjectiveC/RN-TransitioningToARC/_index.html
+    weakRefUnavailableClasses = [NSSet setWithObjects:
+                                 // Classes that don't support zeroing-weak references
+                                 @"NSATSTypesetter",
+                                 @"NSColorSpace",
+                                 @"NSFont",
+                                 @"NSFontManager",
+                                 @"NSFontPanel",
+                                 @"NSImage",
+                                 @"NSMenuView",
+                                 @"NSParagraphStyle",
+                                 @"NSSimpleHorizontalTypesetter",
+                                 @"NSTableCellView",
+                                 @"NSTextView",
+                                 @"NSViewController",
+                                 @"NSWindow",
+                                 @"NSWindowController",
+                                 // In addition
+                                 @"NSHashTable",
+                                 @"NSMapTable",
+                                 @"NSPointerArray",
+                                 // TODO: need to add all the classes in AV Foundation
+                                 nil];
+}
+
+- (BOOL)ma_supportsWeakPointers {
+    if ([self respondsToSelector:@selector(supportsWeakPointers)])
+        return [[self performSelector:@selector(supportsWeakPointers)] boolValue];
+    
+    // NOTE: Also test for overriden implementation of allowsWeakReference in NSObject subclass.
+    // We must use a bit of hackery here because by default NSObject's allowsWeakReference causes
+    // assertion failure and program crash if it is not called by the runtime
+    Method defaultMethod = class_getInstanceMethod([NSObject class], @selector(allowsWeakReference));
+    Method overridenMethod = class_getInstanceMethod([self class], @selector(allowsWeakReference));
+    if (overridenMethod != defaultMethod)
+        return [[self performSelector:@selector(allowsWeakReference)] boolValue];
+    
+    // Make sure we are not one of classes that do not support weak references according to docs
+    for (NSString *className in weakRefUnavailableClasses)
+        if ([self isKindOfClass:NSClassFromString(className)])
+            return NO;
+    
+    // Finally, all tests pass, by default objects support weak pointers
+    return YES;
+}
+
+@end
+
+/******************************************************************************/
 @interface MAKVONotification ()
 {
     NSDictionary			*change;
