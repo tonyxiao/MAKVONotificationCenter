@@ -74,59 +74,87 @@ static NSSet *weakRefUnavailableClasses = nil;
 @end
 
 /******************************************************************************/
+@interface _MAKVONotificationHelper : NSObject <MAKVOObservation>
+{
+  @public		// for MAKVONotificationCenter
+	id __unsafe_unretained	   _observer;
+	id __unsafe_unretained	   _target;
+	id __weak				   _weakObserver;
+	id __weak				   _weakTarget;
+	BOOL					   _observerIsWeak;
+	BOOL					   _targetIsWeak;
+	NSSet					  *_keyPaths;
+	NSKeyValueObservingOptions _options;
+	SEL						   _selector;		// NULL for block-based
+	id						   _userInfo;		// block for block-based
+}
+
+- (id)initWithObserver:(id)observer object:(id)target keyPaths:(NSSet *)keyPaths
+              selector:(SEL)selector userInfo:(id)userInfo options:(NSKeyValueObservingOptions)options;
+- (void)deregister;
+
+@end
+
+/******************************************************************************/
 @interface MAKVONotification ()
 {
-    NSDictionary			*change;
+	id __unsafe_unretained _observer;
+	id __unsafe_unretained _target;
+	id __weak			   _weakObserver;
+	id __weak			   _weakTarget;
 }
 
 - (id)initWithObserver:(id)observer_ object:(id)target_ keyPath:(NSString *)keyPath_ change:(NSDictionary *)change_;
+- (id)initWithNotificationHelper:(_MAKVONotificationHelper *)helper_ keyPath:(NSString *)keyPath_ change:(NSDictionary *)change_;
+
 
 @property(copy,readwrite)	NSString			*keyPath;
-@property(weak,readwrite)	id					observer, target;
+@property(strong,readwrite) NSDictionary        *change;
+@property(assign,readwrite)	BOOL				observerIsWeak, targetIsWeak;
 
 @end
 
 /******************************************************************************/
 @implementation MAKVONotification
 
-@synthesize keyPath, observer, target;
+@synthesize keyPath, observerIsWeak, targetIsWeak, change;
 
 - (id)initWithObserver:(id)observer_ object:(id)target_ keyPath:(NSString *)keyPath_ change:(NSDictionary *)change_
 {
     if ((self = [super init]))
     {
-        self.observer = observer_;
-        self.target = target_;
+        _observer = observer_;
+        _target = target_;
+        self.change = change_;
         self.keyPath = keyPath_;
-        change = change_;
     }
     return self;
 }
 
+- (id)initWithNotificationHelper:(_MAKVONotificationHelper *)helper_ keyPath:(NSString *)keyPath_ change:(NSDictionary *)change_ {
+    self = [super init];
+    if (self) {
+		_observer			= helper_->_observer;
+		_target				= helper_->_target;
+		_weakObserver		= helper_->_weakObserver;
+		_weakTarget			= helper_->_weakTarget;
+		self.observerIsWeak = helper_->_observerIsWeak;
+		self.targetIsWeak	= helper_->_targetIsWeak;
+        self.keyPath        = keyPath_;
+        self.change         = change_;
+    }
+    return self;
+    
+}
+
+
+- (id)observer { return self.observerIsWeak ? _weakObserver : _observer; }
+- (id)target { return self.targetIsWeak ? _weakTarget : _target; }
 - (NSKeyValueChange)kind { return [[change objectForKey:NSKeyValueChangeKindKey] unsignedIntegerValue]; }
 - (id)oldValue { return [change objectForKey:NSKeyValueChangeOldKey]; }
 - (id)newValue { return [change objectForKey:NSKeyValueChangeNewKey]; }
 - (NSIndexSet *)indexes { return [change objectForKey:NSKeyValueChangeIndexesKey]; }
 - (BOOL)isPrior { return [[change objectForKey:NSKeyValueChangeNotificationIsPriorKey] boolValue]; }
-
-@end
-
-/******************************************************************************/
-@interface _MAKVONotificationHelper : NSObject <MAKVOObservation>
-{
-  @public		// for MAKVONotificationCenter
-    id							__weak _observer;
-    id							__weak _target;
-    id							__unsafe_unretained _unsafeTarget;
-    NSSet						*_keyPaths;
-    NSKeyValueObservingOptions	_options;
-    SEL							_selector;	// NULL for block-based
-    id							_userInfo;	// block for block-based
-}
-
-- (id)initWithObserver:(id)observer object:(id)target keyPaths:(NSSet *)keyPaths
-              selector:(SEL)selector userInfo:(id)userInfo options:(NSKeyValueObservingOptions)options;
-- (void)deregister;
 
 @end
 
@@ -140,13 +168,17 @@ static char MAKVONotificationHelperMagicContext = 0;
 {
     if ((self = [super init]))
     {
+        _observerIsWeak = [observer ma_supportsWeakPointers]; // This will be NO if observer is nil
+        _targetIsWeak = [target ma_supportsWeakPointers];
         _observer = observer;
+        _target = target;
+        _weakObserver = _observerIsWeak ? observer : nil;
+        _weakTarget = _targetIsWeak ? target : nil;
         _selector = selector;
         _userInfo = userInfo;
-        _target = target;
-        _unsafeTarget = target;
         _keyPaths = keyPaths;
         _options = options;
+        
         
         // Pass only Apple's options to Apple's code.
         options &= ~(MAKeyValueObservingOptionUnregisterManually | MAKeyValueObservingOptionNoInformation);
@@ -164,17 +196,20 @@ static char MAKVONotificationHelperMagicContext = 0;
         
         NSMutableSet				*observerHelpers = nil, *targetHelpers = nil;
         
-        @synchronized (_observer)
+        if (observer) // Observer can be nil if using block observation
         {
-            if (!(observerHelpers = objc_getAssociatedObject(_observer, &MAKVONotificationCenter_HelpersKey)))
-                objc_setAssociatedObject(_observer, &MAKVONotificationCenter_HelpersKey, observerHelpers = [NSMutableSet set], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            @synchronized (observer)
+            {
+                if (!(observerHelpers = objc_getAssociatedObject(observer, &MAKVONotificationCenter_HelpersKey)))
+                    objc_setAssociatedObject(observer, &MAKVONotificationCenter_HelpersKey, observerHelpers = [NSMutableSet set], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            @synchronized (observerHelpers) { [observerHelpers addObject:self]; }
         }
-        @synchronized (observerHelpers) { [observerHelpers addObject:self]; }
         
-        @synchronized (_target)
+        @synchronized (target)
         {
-            if (!(targetHelpers = objc_getAssociatedObject(_target, &MAKVONotificationCenter_HelpersKey)))
-                objc_setAssociatedObject(_target, &MAKVONotificationCenter_HelpersKey, targetHelpers = [NSMutableSet set], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if (!(targetHelpers = objc_getAssociatedObject(target, &MAKVONotificationCenter_HelpersKey)))
+                objc_setAssociatedObject(target, &MAKVONotificationCenter_HelpersKey, targetHelpers = [NSMutableSet set], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
         @synchronized (targetHelpers) { [targetHelpers addObject:self]; }
     }
@@ -185,7 +220,7 @@ static char MAKVONotificationHelperMagicContext = 0;
 {
     if (context == &MAKVONotificationHelperMagicContext)
     {
-        if (!_observer || !_target)	// weak reference got nilled
+        if ((_observerIsWeak && !_weakObserver) || (_targetIsWeak && !_weakTarget))	// weak reference got nilled
         {
             [self remove];
             return;
@@ -203,7 +238,7 @@ static char MAKVONotificationHelperMagicContext = 0;
             // Pass object instead of _target as the notification object so that
             //	array observations will work as expected.
             if (!(_options & MAKeyValueObservingOptionNoInformation))
-                notification = [[MAKVONotification alloc] initWithObserver:_observer object:object keyPath:keyPath change:change];
+                notification = [[MAKVONotification alloc] initWithNotificationHelper:self keyPath:keyPath change:change];
             ((void (^)(MAKVONotification *))_userInfo)(notification);
         }
 #endif
@@ -222,7 +257,7 @@ static char MAKVONotificationHelperMagicContext = 0;
     //	the zeroing weak reference. If the ZWR is nil at this point, it's
     //	impossible to remove the observation anyway; the target is already gone
     //	and KVO has already thrown its own error. This is the behavior we want.
-    id			__unsafe_unretained checkedTarget = ((_options & MAKeyValueObservingOptionUnregisterManually) ? _target : _unsafeTarget);
+    id __unsafe_unretained checkedTarget = (_targetIsWeak ? _weakTarget : _target);
 
 //NSLog(@"deregistering observer %@ target %@/%@ observation %@", _observer, _target, _unsafeTarget, self);
     if ([checkedTarget isKindOfClass:[NSArray class]])
@@ -238,22 +273,27 @@ static char MAKVONotificationHelperMagicContext = 0;
             [checkedTarget removeObserver:self forKeyPath:keyPath context:&MAKVONotificationHelperMagicContext];
     }
     
-    NSMutableSet			*observerHelpers = objc_getAssociatedObject(_observer, &MAKVONotificationCenter_HelpersKey),
-                            *targetHelpers = objc_getAssociatedObject(_target, &MAKVONotificationCenter_HelpersKey);
+    if ((_observerIsWeak && _weakObserver) || (!_observerIsWeak && _observer)) {        
+        NSMutableSet			*observerHelpers = objc_getAssociatedObject(_observer, &MAKVONotificationCenter_HelpersKey);
+        @synchronized (observerHelpers) { [observerHelpers removeObject:self]; }
+    }
     
-    @synchronized (observerHelpers) { [observerHelpers removeObject:self]; }
-    @synchronized (targetHelpers) { [targetHelpers removeObject:self]; } // if during dealloc, this will happen momentarily anyway
+    if ((_targetIsWeak && _weakTarget) || (!_targetIsWeak && _target)) {
+        NSMutableSet			*targetHelpers = objc_getAssociatedObject(_target, &MAKVONotificationCenter_HelpersKey);
+        @synchronized (targetHelpers) { [targetHelpers removeObject:self]; } // if during dealloc, this will happen momentarily anyway
+    }
     
     // Protect against multiple invocations
     _observer = nil;
     _target = nil;
-    _unsafeTarget = nil;
+    _weakTarget = nil;
+    _weakObserver = nil;
     _keyPaths = nil;
 }
 
 - (BOOL)isValid	// the observation is invalid if and only if it has been deregistered
 {
-    return _unsafeTarget != nil;
+    return _target != nil;
 }
 
 - (void)remove
@@ -374,6 +414,8 @@ static char MAKVONotificationHelperMagicContext = 0;
 
 - (void)_swizzleObjectClassIfNeeded:(id)object
 {
+    if (!object)
+        return;
     @synchronized (MAKVONotificationCenter_swizzledClasses)
     {
         Class			class = [object class];//object_getClass(object);
