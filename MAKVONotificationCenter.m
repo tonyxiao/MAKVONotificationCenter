@@ -427,6 +427,13 @@ static char MAKVONotificationHelperMagicContext = 0;
 
 #if NS_BLOCKS_AVAILABLE
 
+- (id<MAKVOObservation>)addObservationKeyPath:(id<MAKVOKeyPathSet>)keyPath
+                                      options:(NSKeyValueObservingOptions)options
+                                        block:(void (^)(MAKVONotification *notification))block
+{
+    return [[MAKVONotificationCenter defaultCenter] addObserver:nil object:self keyPath:keyPath options:options block:block];
+}
+
 - (id<MAKVOObservation>)addObserver:(id)observer keyPath:(id<MAKVOKeyPathSet>)keyPath options:(NSKeyValueObservingOptions)options
                               block:(void (^)(MAKVONotification *notification))block
 {
